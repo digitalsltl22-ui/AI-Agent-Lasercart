@@ -4,9 +4,16 @@ import path from "path";
 import { fileURLToPath } from "url";
 import * as cheerio from "cheerio";
 import fetch from "node-fetch";
+import { GoogleGenAI, Type } from "@google/genai";
+import dotenv from "dotenv";
+
+dotenv.config();
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
+
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "YOUR_HARDCODED_KEY_HERE";
+const ai = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
 
 async function startServer() {
   const app = express();
@@ -16,6 +23,7 @@ async function startServer() {
 
   // API Route: Scrape Website
   app.post("/api/scrape", async (req, res) => {
+    // ... existing scrape logic ...
     const { url } = req.body;
     if (!url) {
       return res.status(400).json({ error: "URL is required" });
@@ -58,6 +66,136 @@ async function startServer() {
     } catch (error) {
       console.error("Scrape error:", error);
       res.status(500).json({ error: "Failed to scrape website" });
+    }
+  });
+
+  // API Route: Analyze Website
+  app.post("/api/analyze", async (req, res) => {
+    const { url, scrapedData } = req.body;
+    try {
+      const prompt = `
+        Analyze the following website data and extract B2B lead intelligence.
+        URL: ${url}
+        Title: ${scrapedData.title}
+        Meta Description: ${scrapedData.metaDescription}
+        Content Snippet: ${scrapedData.content}
+        Links: ${scrapedData.links.join(", ")}
+
+        Rules:
+        - Do NOT guess emails without strong pattern match.
+        - Prefer accuracy over assumption.
+        - If data missing -> return null.
+        - Extract company name, industry, services, location, and decision makers.
+        - Identify social media links from the provided links.
+      `;
+
+      const response = await ai.getGenerativeModel({ model: "gemini-1.5-flash" }).generateContent({
+        contents: [{ role: "user", parts: [{ text: prompt }] }],
+        generationConfig: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              company_name: { type: Type.STRING },
+              industry: { type: Type.STRING },
+              website: { type: Type.STRING },
+              emails: { type: Type.ARRAY, items: { type: Type.STRING } },
+              phones: { type: Type.ARRAY, items: { type: Type.STRING } },
+              owner: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  role: { type: Type.STRING },
+                  confidence: { type: Type.STRING, enum: ["High", "Medium", "Low"] },
+                },
+              },
+              social_links: {
+                type: Type.OBJECT,
+                properties: {
+                  linkedin: { type: Type.STRING },
+                  facebook: { type: Type.STRING },
+                  instagram: { type: Type.STRING },
+                  twitter: { type: Type.STRING },
+                  youtube: { type: Type.STRING },
+                },
+              },
+              summary: { type: Type.STRING },
+              services: { type: Type.ARRAY, items: { type: Type.STRING } },
+              products: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    name: { type: Type.STRING },
+                    price: { type: Type.STRING },
+                    size: { type: Type.STRING },
+                    quantity: { type: Type.STRING },
+                    description: { type: Type.STRING },
+                  },
+                },
+              },
+              location: { type: Type.STRING },
+            },
+          },
+        },
+      });
+
+      res.json(JSON.parse(response.response.text()));
+    } catch (error) {
+      console.error("Analyze error:", error);
+      res.status(500).json({ error: "Failed to analyze website" });
+    }
+  });
+
+  // API Route: Chat with Agent
+  app.post("/api/chat", async (req, res) => {
+    const { message, history, context } = req.body;
+    try {
+      const systemInstruction = `
+        You are a smart B2B Service Agent for ${context?.company_name || "a company"}.
+        Knowledge Base: ${context ? JSON.stringify(context) : "No specific company data loaded yet."}
+        Goals: Answer queries, explain services, handle objections, collect leads (Name, Email, Requirement).
+        Tone: Professional, Helpful, Sales-oriented.
+      `;
+
+      const model = ai.getGenerativeModel({ 
+        model: "gemini-1.5-flash",
+        systemInstruction,
+        tools: [{
+          functionDeclarations: [{
+            name: "saveLead",
+            description: "Saves lead details",
+            parameters: {
+              type: Type.OBJECT,
+              properties: {
+                name: { type: Type.STRING },
+                email: { type: Type.STRING },
+                requirement: { type: Type.STRING },
+              },
+              required: ["name", "email", "requirement"],
+            },
+          }]
+        }]
+      });
+
+      const chat = model.startChat({
+        history: history.map((h: any) => ({
+          role: h.role === "user" ? "user" : "model",
+          parts: [{ text: h.content }],
+        })),
+      });
+
+      const result = await chat.sendMessage(message);
+      const responseText = result.response.text();
+      const functionCalls = result.response.candidates?.[0]?.content?.parts?.filter(p => p.functionCall);
+
+      res.json({
+        text: responseText,
+        functionCalls: functionCalls?.map(p => p.functionCall) || [],
+      });
+    } catch (error) {
+      console.error("Chat error:", error);
+      res.status(500).json({ error: "Failed to chat with agent" });
     }
   });
 

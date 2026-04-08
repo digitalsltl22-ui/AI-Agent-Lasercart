@@ -1,3 +1,11 @@
+export interface Product {
+  name: string;
+  price: string | null;
+  size: string | null;
+  quantity: string | null;
+  description: string | null;
+}
+
 export interface LeadIntelligence {
   company_name: string | null;
   industry: string | null;
@@ -18,6 +26,7 @@ export interface LeadIntelligence {
   };
   summary: string | null;
   services?: string[];
+  products?: Product[];
   location?: string | null;
 }
 

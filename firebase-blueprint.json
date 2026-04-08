@@ -1,0 +1,77 @@
+{
+  "entities": {
+    "LeadIntelligence": {
+      "title": "Lead Intelligence",
+      "description": "Extracted intelligence from a website analysis.",
+      "type": "object",
+      "properties": {
+        "company_name": { "type": "string" },
+        "industry": { "type": "string" },
+        "website": { "type": "string" },
+        "emails": { "type": "array", "items": { "type": "string" } },
+        "phones": { "type": "array", "items": { "type": "string" } },
+        "summary": { "type": "string" },
+        "services": { "type": "array", "items": { "type": "string" } },
+        "location": { "type": "string" },
+        "products": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "name": { "type": "string" },
+              "price": { "type": "string" },
+              "size": { "type": "string" },
+              "quantity": { "type": "string" },
+              "description": { "type": "string" }
+            }
+          }
+        },
+        "owner": {
+          "type": "object",
+          "properties": {
+            "name": { "type": "string" },
+            "role": { "type": "string" },
+            "confidence": { "type": "string", "enum": ["High", "Medium", "Low"] }
+          }
+        },
+        "social_links": {
+          "type": "object",
+          "properties": {
+            "linkedin": { "type": "string" },
+            "facebook": { "type": "string" },
+            "instagram": { "type": "string" },
+            "twitter": { "type": "string" },
+            "youtube": { "type": "string" }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["website", "createdAt", "createdBy"]
+    },
+    "Lead": {
+      "title": "Lead",
+      "description": "A lead captured during a chat interaction.",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "requirement": { "type": "string" },
+        "timestamp": { "type": "string", "format": "date-time" },
+        "website": { "type": "string" },
+        "createdBy": { "type": "string" }
+      },
+      "required": ["name", "email", "timestamp", "createdBy"]
+    }
+  },
+  "firestore": {
+    "/intelligence/{intelligenceId}": {
+      "schema": "LeadIntelligence",
+      "description": "Collection of analyzed website intelligence."
+    },
+    "/leads/{leadId}": {
+      "schema": "Lead",
+      "description": "Collection of captured leads."
+    }
+  }
+}

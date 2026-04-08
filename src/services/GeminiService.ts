@@ -72,6 +72,19 @@ export const GeminiService = {
             },
             summary: { type: Type.STRING },
             services: { type: Type.ARRAY, items: { type: Type.STRING } },
+            products: {
+              type: Type.ARRAY,
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  name: { type: Type.STRING },
+                  price: { type: Type.STRING },
+                  size: { type: Type.STRING },
+                  quantity: { type: Type.STRING },
+                  description: { type: Type.STRING },
+                },
+              },
+            },
             location: { type: Type.STRING },
           },
         },
@@ -121,6 +134,9 @@ export const GeminiService = {
     });
 
     if (response.functionCalls) {
+      const modelContent = response.candidates?.[0]?.content;
+      if (!modelContent) return response.text;
+
       for (const call of response.functionCalls) {
         if (call.name === "saveLead") {
           const lead = call.args as any;
@@ -132,10 +148,12 @@ export const GeminiService = {
           // Continue the conversation after function call
           const followUp = await ai.models.generateContent({
             model: "gemini-3-flash-preview",
-            contents: history.map(h => ({ role: h.role, parts: [{ text: h.content }] }))
-              .concat([{ role: "user", parts: [{ text: message }] }])
-              .concat([{ role: "model", parts: [{ functionCall: call }] }])
-              .concat([{ role: "user", parts: [{ functionResponse: { name: "saveLead", response: { status: "success" } } }] }]),
+            contents: [
+              ...history.map(h => ({ role: h.role, parts: [{ text: h.content }] })),
+              { role: "user", parts: [{ text: message }] },
+              modelContent,
+              { role: "user", parts: [{ functionResponse: { name: "saveLead", response: { status: "success" } } }] }
+            ] as any,
             config: { systemInstruction },
           });
           return followUp.text;

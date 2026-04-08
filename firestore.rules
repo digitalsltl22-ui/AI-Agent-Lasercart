@@ -1,0 +1,112 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ===============================================================
+    // Assumed Data Model
+    // ===============================================================
+    //
+    // Collection: intelligence
+    // Document ID: auto-generated
+    // Fields:
+    //   - company_name: string (optional)
+    //   - industry: string (optional)
+    //   - website: string (required)
+    //   - emails: list (optional)
+    //   - phones: list (optional)
+    //   - summary: string (optional)
+    //   - services: list (optional)
+    //   - products: list (optional)
+    //   - location: string (optional)
+    //   - owner: map (optional)
+    //   - social_links: map (optional)
+    //   - createdAt: timestamp (required)
+    //   - createdBy: string (required) - UID of the user who created it
+    //
+    // Collection: leads
+    // Document ID: auto-generated
+    // Fields:
+    //   - name: string (required)
+    //   - email: string (required)
+    //   - requirement: string (required)
+    //   - timestamp: timestamp (required)
+    //   - website: string (optional)
+    //   - createdBy: string (required) - UID of the user who created it
+    //
+    // ===============================================================
+
+    // ===============================================================
+    // Helper Functions
+    // ===============================================================
+
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isDocOwner() {
+      return isAuthenticated() && request.auth.uid == resource.data.createdBy;
+    }
+
+    function isValidEmail(email) {
+      return email is string && email.matches("^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$");
+    }
+
+    function isValidString(val, maxLen) {
+      return val is string && val.size() <= maxLen;
+    }
+
+    // ===============================================================
+    // Domain Validators
+    // ===============================================================
+
+    function isValidIntelligence(data) {
+      return data.keys().hasAll(['website', 'createdAt', 'createdBy']) &&
+             data.website is string &&
+             data.createdAt is timestamp &&
+             data.createdBy == request.auth.uid &&
+             (!('company_name' in data) || isValidString(data.company_name, 200)) &&
+             (!('industry' in data) || isValidString(data.industry, 200)) &&
+             (!('summary' in data) || isValidString(data.summary, 2000)) &&
+             (!('location' in data) || isValidString(data.location, 500));
+    }
+
+    function isValidLead(data) {
+      return data.keys().hasAll(['name', 'email', 'requirement', 'timestamp', 'createdBy']) &&
+             isValidString(data.name, 200) &&
+             isValidEmail(data.email) &&
+             isValidString(data.requirement, 5000) &&
+             data.timestamp is timestamp &&
+             data.createdBy == request.auth.uid;
+    }
+
+    // ===============================================================
+    // Rules
+    // ===============================================================
+
+    match /intelligence/{intelligenceId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && isValidIntelligence(request.resource.data);
+      allow update: if isDocOwner() && isValidIntelligence(request.resource.data) &&
+                      request.resource.data.createdAt == resource.data.createdAt &&
+                      request.resource.data.createdBy == resource.data.createdBy;
+      allow delete: if isDocOwner();
+    }
+
+    match /leads/{leadId} {
+      allow read: if isDocOwner();
+      allow create: if isAuthenticated() && isValidLead(request.resource.data);
+      allow update: if isDocOwner() && isValidLead(request.resource.data) &&
+                      request.resource.data.timestamp == resource.data.timestamp &&
+                      request.resource.data.createdBy == resource.data.createdBy;
+      allow delete: if isDocOwner();
+    }
+
+    match /{path=**} {
+      allow read, write: if false;
+    }
+  }
+}

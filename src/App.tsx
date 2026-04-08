@@ -3,13 +3,16 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from "react";
-import { Search, Globe, MessageSquare, Database, Shield, Zap, LayoutDashboard, Send, User, Bot, Loader2, Mail, Phone, MapPin, Linkedin, Facebook, Instagram, Twitter, Youtube, ExternalLink } from "lucide-react";
+import React, { useState, useEffect } from "react";
+import { Search, Globe, MessageSquare, Database, Shield, Zap, LayoutDashboard, Send, User, Bot, Loader2, Mail, Phone, MapPin, Linkedin, Facebook, Instagram, Twitter, Youtube, ExternalLink, Code, Copy, Check } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import { cn } from "@/src/lib/utils";
 import { LeadIntelligence, ChatMessage, LeadDetail } from "./types";
 import { ScraperService } from "./services/ScraperService";
 import { GeminiService } from "./services/GeminiService";
+import { db, auth, OperationType, handleFirestoreError } from "./firebase";
+import { collection, addDoc, serverTimestamp, query, where, onSnapshot, orderBy } from "firebase/firestore";
+import { signInAnonymously, onAuthStateChanged } from "firebase/auth";
 
 export default function App() {
   const [url, setUrl] = useState("");
@@ -17,9 +20,59 @@ export default function App() {
   const [intelligence, setIntelligence] = useState<LeadIntelligence | null>(null);
   const [chatHistory, setChatHistory] = useState<ChatMessage[]>([]);
   const [inputMessage, setInputMessage] = useState("");
-  const [activeTab, setActiveTab] = useState<"dashboard" | "chat" | "leads">("dashboard");
+  const [activeTab, setActiveTab] = useState<"dashboard" | "chat" | "leads" | "embed">("dashboard");
   const [leads, setLeads] = useState<LeadDetail[]>([]);
   const [isChatLoading, setIsChatLoading] = useState(false);
+  const [isWidget, setIsWidget] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [user, setUser] = useState<any>(null);
+
+  useEffect(() => {
+    const unsubscribe = onAuthStateChanged(auth, (u) => {
+      if (u) {
+        setUser(u);
+      } else {
+        signInAnonymously(auth).catch(err => console.error("Auth error:", err));
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+
+    const q = query(
+      collection(db, "leads"),
+      where("createdBy", "==", user.uid),
+      orderBy("timestamp", "desc")
+    );
+
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const leadsData = snapshot.docs.map(doc => ({
+        ...doc.data(),
+        timestamp: doc.data().timestamp?.toDate()?.toLocaleString() || new Date().toLocaleString()
+      })) as LeadDetail[];
+      setLeads(leadsData);
+    }, (error) => {
+      handleFirestoreError(error, OperationType.LIST, "leads");
+    });
+
+    return () => unsubscribe();
+  }, [user]);
+
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    if (params.get("widget") === "true") {
+      setIsWidget(true);
+      setActiveTab("chat");
+    }
+  }, []);
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
 
   const handleAnalyze = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -29,6 +82,15 @@ export default function App() {
       const scrapedData = await ScraperService.scrapeUrl(url);
       const result = await GeminiService.analyzeWebsite(url, scrapedData);
       setIntelligence(result);
+      
+      if (user) {
+        await addDoc(collection(db, "intelligence"), {
+          ...result,
+          createdAt: serverTimestamp(),
+          createdBy: user.uid
+        });
+      }
+
       setActiveTab("dashboard");
     } catch (error) {
       console.error(error);
@@ -52,8 +114,19 @@ export default function App() {
         userMsg, 
         chatHistory, 
         intelligence,
-        (newLead) => {
-          setLeads(prev => [newLead, ...prev]);
+        async (newLead) => {
+          if (user) {
+            try {
+              await addDoc(collection(db, "leads"), {
+                ...newLead,
+                timestamp: serverTimestamp(),
+                createdBy: user.uid,
+                website: intelligence?.website || ""
+              });
+            } catch (err) {
+              handleFirestoreError(err, OperationType.CREATE, "leads");
+            }
+          }
         }
       );
       setChatHistory(prev => [...prev, { role: "model", content: response }]);
@@ -64,6 +137,64 @@ export default function App() {
       setIsChatLoading(false);
     }
   };
+
+  if (isWidget) {
+    return (
+      <div className="h-screen bg-white flex flex-col">
+        {/* Simplified Chat for Widget */}
+        <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-gray-50/30">
+          {chatHistory.map((msg, i) => (
+            <div key={i} className={cn("flex gap-3", msg.role === "user" ? "flex-row-reverse" : "")}>
+              <div className={cn(
+                "w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0",
+                msg.role === "user" ? "bg-blue-600 text-white" : "bg-white border border-gray-200 text-blue-600"
+              )}>
+                {msg.role === "user" ? <User size={12} /> : <Bot size={12} />}
+              </div>
+              <div className={cn(
+                "max-w-[85%] p-3 rounded-xl text-sm leading-relaxed shadow-sm",
+                msg.role === "user" ? "bg-blue-600 text-white rounded-tr-none" : "bg-white text-gray-800 rounded-tl-none border border-gray-100"
+              )}>
+                {msg.content}
+              </div>
+            </div>
+          ))}
+          {isChatLoading && (
+            <div className="flex gap-3">
+              <div className="w-7 h-7 rounded-full bg-white border border-gray-200 text-blue-600 flex items-center justify-center animate-pulse">
+                <Bot size={12} />
+              </div>
+              <div className="bg-white border border-gray-100 p-3 rounded-xl rounded-tl-none shadow-sm">
+                <div className="flex gap-1">
+                  <div className="w-1 h-1 bg-gray-300 rounded-full animate-bounce" />
+                  <div className="w-1 h-1 bg-gray-300 rounded-full animate-bounce [animation-delay:0.2s]" />
+                  <div className="w-1 h-1 bg-gray-300 rounded-full animate-bounce [animation-delay:0.4s]" />
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="p-4 bg-white border-t border-gray-100">
+          <form onSubmit={handleSendMessage} className="relative">
+            <input
+              type="text"
+              placeholder="Type your message..."
+              className="w-full bg-gray-50 border border-gray-200 rounded-xl py-3 pl-4 pr-12 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500/20 focus:border-blue-500 transition-all"
+              value={inputMessage}
+              onChange={(e) => setInputMessage(e.target.value)}
+            />
+            <button
+              type="submit"
+              disabled={!inputMessage.trim() || isChatLoading}
+              className="absolute right-1.5 top-1/2 -translate-y-1/2 w-8 h-8 bg-blue-600 text-white rounded-lg flex items-center justify-center hover:bg-blue-700 transition-colors disabled:opacity-50"
+            >
+              <Send size={14} />
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-[#F8F9FA] text-[#1A1A1A] font-sans selection:bg-blue-100">
@@ -109,6 +240,16 @@ export default function App() {
           >
             <Database size={18} />
             Lead Database
+          </button>
+          <button
+            onClick={() => setActiveTab("embed")}
+            className={cn(
+              "w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-medium transition-all cursor-pointer",
+              activeTab === "embed" ? "bg-blue-50 text-blue-600" : "text-gray-600 hover:bg-gray-50"
+            )}
+          >
+            <Code size={18} />
+            Embed Script
           </button>
         </nav>
 
@@ -229,6 +370,37 @@ export default function App() {
                                 <span key={i} className="px-3 py-1 bg-blue-50 text-blue-600 rounded-full text-[11px] font-semibold">
                                   {service}
                                 </span>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {intelligence.products && intelligence.products.length > 0 && (
+                          <div className="mt-8 pt-8 border-t border-gray-100">
+                            <h4 className="text-xs font-bold text-gray-400 uppercase mb-4">Product Catalog</h4>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              {intelligence.products.map((product, i) => (
+                                <div key={i} className="p-4 bg-gray-50 rounded-xl border border-gray-100">
+                                  <div className="flex justify-between items-start mb-2">
+                                    <div className="font-bold text-sm">{product.name}</div>
+                                    {product.price && <div className="text-blue-600 font-bold text-xs">{product.price}</div>}
+                                  </div>
+                                  {product.description && <p className="text-[11px] text-gray-500 mb-3 leading-relaxed">{product.description}</p>}
+                                  <div className="flex gap-4">
+                                    {product.size && (
+                                      <div className="flex flex-col">
+                                        <span className="text-[9px] text-gray-400 uppercase font-bold">Size</span>
+                                        <span className="text-[11px] font-medium">{product.size}</span>
+                                      </div>
+                                    )}
+                                    {product.quantity && (
+                                      <div className="flex flex-col">
+                                        <span className="text-[9px] text-gray-400 uppercase font-bold">Qty</span>
+                                        <span className="text-[11px] font-medium">{product.quantity}</span>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
                               ))}
                             </div>
                           </div>
@@ -488,6 +660,101 @@ export default function App() {
                         )}
                       </tbody>
                     </table>
+                  </div>
+                </motion.div>
+              )}
+
+              {activeTab === "embed" && (
+                <motion.div
+                  key="embed"
+                  initial={{ opacity: 0, y: 20 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -20 }}
+                  className="space-y-6 max-w-4xl"
+                >
+                  <div>
+                    <h2 className="text-2xl font-bold">Embed Your Agent</h2>
+                    <p className="text-sm text-gray-500">Copy the script below to add the LeadIntel agent to your website.</p>
+                  </div>
+
+                  <div className="bg-white rounded-3xl border border-gray-200 p-8 shadow-sm space-y-6">
+                    <div className="space-y-4">
+                      <h3 className="text-sm font-bold uppercase tracking-wider text-gray-400">Installation Script</h3>
+                      <p className="text-sm text-gray-600 leading-relaxed">
+                        Paste this code snippet into the <code className="bg-gray-100 px-1 rounded text-blue-600">&lt;body&gt;</code> of your website to enable the floating chat widget.
+                      </p>
+                      
+                      <div className="relative group">
+                        <pre className="bg-gray-900 text-gray-100 p-6 rounded-2xl text-xs font-mono overflow-x-auto leading-relaxed">
+{`<script>
+  (function() {
+    var iframe = document.createElement('iframe');
+    iframe.src = "${window.location.origin}/?widget=true";
+    iframe.style.position = 'fixed';
+    iframe.style.bottom = '20px';
+    iframe.style.right = '20px';
+    iframe.style.width = '400px';
+    iframe.style.height = '600px';
+    iframe.style.border = 'none';
+    iframe.style.borderRadius = '24px';
+    iframe.style.boxShadow = '0 20px 40px rgba(0,0,0,0.15)';
+    iframe.style.zIndex = '9999';
+    document.body.appendChild(iframe);
+  })();
+</script>`}
+                        </pre>
+                        <button
+                          onClick={() => copyToClipboard(`<script>
+  (function() {
+    var iframe = document.createElement('iframe');
+    iframe.src = "${window.location.origin}/?widget=true";
+    iframe.style.position = 'fixed';
+    iframe.style.bottom = '20px';
+    iframe.style.right = '20px';
+    iframe.style.width = '400px';
+    iframe.style.height = '600px';
+    iframe.style.border = 'none';
+    iframe.style.borderRadius = '24px';
+    iframe.style.boxShadow = '0 20px 40px rgba(0,0,0,0.15)';
+    iframe.style.zIndex = '9999';
+    document.body.appendChild(iframe);
+  })();
+</script>`)}
+                          className="absolute right-4 top-4 p-2 bg-white/10 hover:bg-white/20 rounded-lg text-white transition-all"
+                        >
+                          {copied ? <Check size={16} className="text-green-400" /> : <Copy size={16} />}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="pt-6 border-t border-gray-100 grid grid-cols-1 md:grid-cols-2 gap-6">
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-blue-600">
+                          <Zap size={16} />
+                          <span className="text-xs font-bold uppercase tracking-wider">Instant Sync</span>
+                        </div>
+                        <p className="text-xs text-gray-500">Any updates to your agent's intelligence are automatically synced to your website.</p>
+                      </div>
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 text-green-600">
+                          <Shield size={16} />
+                          <span className="text-xs font-bold uppercase tracking-wider">Secure Hosting</span>
+                        </div>
+                        <p className="text-xs text-gray-500">The widget runs in a secure sandbox, protecting your site's data.</p>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="bg-blue-50 border border-blue-100 rounded-2xl p-6 flex gap-4 items-start">
+                    <div className="p-2 bg-blue-100 text-blue-600 rounded-lg">
+                      <MessageSquare size={20} />
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-bold text-blue-900 mb-1">Pro Tip: Custom Styling</h4>
+                      <p className="text-xs text-blue-700 leading-relaxed">
+                        You can adjust the <code className="bg-blue-100 px-1 rounded">width</code> and <code className="bg-blue-100 px-1 rounded">height</code> in the script to better fit your website's design.
+                      </p>
+                    </div>
                   </div>
                 </motion.div>
               )}
